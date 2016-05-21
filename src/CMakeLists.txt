@@ -24,6 +24,9 @@ target_link_libraries(tagtest ${AT_LIBS})
 add_executable(quadtest quadtest.cpp)
 target_link_libraries(quadtest ${AT_LIBS})
 
+add_executable(videoapriltags videoapriltags.cpp)
+target_link_libraries(videoapriltags ${AT_LIBS})
+
 if (GLUT_LIBRARY)
 
   add_executable(gltest gltest.cpp)
