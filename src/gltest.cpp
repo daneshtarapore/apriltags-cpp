@@ -24,6 +24,8 @@
 
 #define DEFAULT_TAG_FAMILY "Tag36h11"
 
+using namespace cv;
+
 typedef struct GLTestOptions {
   GLTestOptions() :
       params(),
@@ -48,6 +50,24 @@ typedef struct GLTestOptions {
   bool mirror_display;
 } GLTestOptions;
 
+
+void getEulerAngles(Mat &rotCamerMatrix, Mat& transVect, Vec3d &eulerAngles){
+
+    Mat cameraMatrix,rotMatrix,rotMatrixX,rotMatrixY,rotMatrixZ;
+    double* _r = rotCamerMatrix.ptr<double>();
+    double projMatrix[12] = {_r[0],_r[1],_r[2],0,
+                          _r[3],_r[4],_r[5],0,
+                          _r[6],_r[7],_r[8],0};
+
+    decomposeProjectionMatrix( Mat(3,4,CV_64FC1,projMatrix),
+                               cameraMatrix,
+                               rotMatrix,
+                               transVect,
+                               rotMatrixX,
+                               rotMatrixY,
+                               rotMatrixZ,
+                               eulerAngles);
+}
 
 void print_usage(const char* tool_name, FILE* output=stderr) {
 
@@ -366,12 +386,13 @@ void display() {
 
   glColor3ub(0,255,0);
   glMatrixMode(GL_MODELVIEW);
-  for (size_t i=0; i<detections.size(); ++i) {
+  std::cout << "Num detectors " << detections.size() << std::endl;
+  for (size_t id=0; id<detections.size(); ++id) {
     
     cv::Mat_<double> r, R, t, M = cv::Mat_<double>::eye(4,4);
     CameraUtil::homographyToPoseCV(opts.focal_length, opts.focal_length, 
                                    opts.tag_size,
-                                   detections[i].homography,
+                                   detections[id].homography,
                                    r, t);
     cv::Rodrigues(r, R);
 
@@ -381,6 +402,22 @@ void display() {
       }
       M(3,i) = t(i);
     }
+
+    cv::Mat_<double> translation = t;
+
+    Vec3d eulerAngles;
+    getEulerAngles(R, t, eulerAngles);
+    //std::cout << "Detector id " << id << " t[0] " << t[0]  << " t[1] " << t[1]  << " t[2] " << t[2] << std::endl;
+    std::cout << "Index " << id << std::endl;
+    //std::cout << "Detector observed code " << detections[id].obsCode << " matched code " << detections[id].code << " id " << detections[id].id << std::endl;
+    //std::cout << "rotation to align code " << detections[id].rotation << std::endl;
+    std::cout << "tag center in pixel coordinates" << detections[id].cxy << "  Position (in fractional pixel coordinates) of the detection " <<
+                 detections[id].p[0] << " " << detections[id].p[1] << " " << detections[id].p[2] <<  " " << detections[id].p[3] << std::endl;
+    std::cout << "The homography is relative to image center, whose coordinates are "  << detections[id].hxy << std::endl;
+    std::cout << " Rotation eulerAngles " << eulerAngles << std::endl;
+    std::cout << " translation " << translation << std::endl;
+
+
 
     glPushMatrix();
     glMultMatrixd(&(M(0,0)));
@@ -437,6 +474,12 @@ void idle() {
     exit(1);
   }
 
+  if (frame.empty())
+  {
+      std::cerr << "no frames!\n";
+      exit(1);
+  }
+
   cv::Point2d opticalCenter(0.5*frame.cols, 0.5*frame.rows);
   detector->process(frame, opticalCenter, detections);
   //std::cout << "got " << detections.size() << " detections.\n";
@@ -482,19 +525,45 @@ int main(int argc, char** argv) {
     family.setErrorRecoveryFraction(opts.error_fraction);
   }
 
-  capture = new cv::VideoCapture(opts.device_num);
+  /*capture = new cv::VideoCapture(opts.device_num);
 
   if (opts.frame_width && opts.frame_height) {
 
     // Use uvcdynctrl to figure this out dynamically at some point?
     capture->set(CV_CAP_PROP_FRAME_WIDTH, opts.frame_width);
-    capture->set(CV_CAP_PROP_FRAME_HEIGHT, opts.frame_height);
-    
+    capture->set(CV_CAP_PROP_FRAME_HEIGHT, opts.frame_height);   
+  }*/
 
+
+  capture = new cv::VideoCapture();
+  std::string videoFilePath = "/home/danesh/work/apriltags-cpp/videos/00001.MTS";
+
+  try
+  {
+      //open the video file
+      capture->open(videoFilePath); // open the video file
+      if(!capture->isOpened())  // check if we succeeded
+          CV_Error(CV_StsError, "Can not open Video file");
+
+      std::cout << " FRAME_COUNT " << capture->get(CV_CAP_PROP_FRAME_COUNT) << std::endl;
   }
+  catch( cv::Exception& e )
+  {
+      std::cerr << e.msg << std::endl;
+      exit(1);
+  }
+
+
+
 
   cv::Mat frame;
   *capture >> frame;
+
+  if (frame.empty())
+  {
+      std::cerr << "no frames!\n";
+      exit(1);
+  }
 
   width = frame.cols;
   height = frame.rows;
