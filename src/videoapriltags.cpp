@@ -13,10 +13,12 @@
 #include <iomanip>
 #include <stdio.h>
 #include <getopt.h>
+#include <math.h>
 
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+
 
 #include "CameraUtil.h"
 
@@ -161,7 +163,7 @@ int main(int argc, char** argv)
     std::cout << "family.errorRecoveryBits = " << family.errorRecoveryBits << "\n";
 
     cv::VideoCapture vc;
-    std::string videoFilePath = "/home/millard/apriltags-cpp/videos/00002.MTS";
+    std::string videoFilePath = "/home/danesh/work/apriltags-cpp/videos/00002.MTS";
 
     try
     {
@@ -242,11 +244,21 @@ int main(int argc, char** argv)
                 cv::Vec3d eulerAngles;
                 getEulerAngles(R, eulerAngles);
 
-                std::ostringstream x, y, orientation;
+                float bottomlineangle = std::atan2(detections[i].p[1].y - detections[i].p[0].y, detections[i].p[1].x - detections[i].p[0].x)* 180.0f / M_PI; // atan2 returns angle in radians [-pi, pi]
+                if(std::isnan(bottomlineangle))
+                {
+                    std::cout << " angle is nan for tag points " << detections[i].p << std::endl;
+                    exit(-1);
+                }
+
+                std::ostringstream x, y, orientation, taglineangle;
                 x << std::fixed << std::setprecision(2) << detections[i].cxy.x;
                 y << std::fixed << std::setprecision(2) << detections[i].cxy.y;
                 orientation << std::fixed << std::setprecision(2) << eulerAngles[2]; // roll
-                std::string text = "x: " + x.str() + ", y: " + y.str() + ", a: " + orientation.str();
+                taglineangle << std::fixed << std::setprecision(2) << bottomlineangle;
+                std::string text = "x: " + x.str() + ", y: " + y.str() + ", a: " + orientation.str() + ", b: " + taglineangle.str();
+
+
 
                 cv::putText(show,
                             text,
@@ -254,6 +266,26 @@ int main(int argc, char** argv)
                             cv::FONT_HERSHEY_SIMPLEX,
                             1,
                             CV_RGB(255, 255, 255),
+                            2,
+                            CV_AA);
+
+                // always points to the bottom-left corner of the tag
+                cv::putText(show,
+                            "x",
+                            detections[i].p[0],
+                            cv::FONT_HERSHEY_SIMPLEX,
+                            1,
+                            CV_RGB(255, 0, 0),
+                            2,
+                            CV_AA);
+
+                // always points to the bottom-right corner of the tag
+                cv::putText(show,
+                            "y",
+                            detections[i].p[1],
+                            cv::FONT_HERSHEY_SIMPLEX,
+                            1,
+                            CV_RGB(255, 0, 0),
                             2,
                             CV_AA);
             }
