@@ -13,6 +13,7 @@
 // classes all used by the TagDetector class.
 
 #include "AprilTypes.h"
+#include <map>
 
 //////////////////////////////////////////////////////////////////////
 // Struct for a line segment, which holds start/end points, length,
@@ -139,7 +140,7 @@ public:
 };
 
 typedef std::vector<XYW> XYWArray;
-typedef std::map< int, XYWArray > ClusterLookup;
+typedef std::map<int, XYWArray> ClusterLookup;
 
 GLineSegment2D lsqFitXYW(const XYWArray& points);
 

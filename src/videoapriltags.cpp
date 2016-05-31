@@ -18,7 +18,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
-
+#include <opencv2/aruco.hpp>
 
 #include "CameraUtil.h"
 
@@ -160,8 +160,321 @@ double angle(cv::Point pt1, cv::Point pt2, cv::Point pt0)
     return (dx1*dx2 + dy1*dy2)/sqrt((dx1*dx1 + dy1*dy1)*(dx2*dx2 + dy2*dy2) + 1e-10);
 }
 
+using namespace cv;
+using namespace std;
+
+/**
+  * @brief Convert input image to gray if it is a 3-channels image
+  */
+static void _convertToGrey(InputArray _in, OutputArray _out) {
+
+    CV_Assert(_in.getMat().channels() == 1 || _in.getMat().channels() == 3);
+
+    _out.create(_in.getMat().size(), CV_8UC1);
+    if(_in.getMat().type() == CV_8UC3)
+        cvtColor(_in.getMat(), _out.getMat(), COLOR_BGR2GRAY);
+    else
+        _in.getMat().copyTo(_out);
+}
+
+/**
+  * @brief Threshold input image using adaptive thresholding
+  */
+static void _threshold(InputArray _in, OutputArray _out, int winSize, double constant) {
+
+    CV_Assert(winSize >= 3);
+    if(winSize % 2 == 0) winSize++; // win size must be odd
+    adaptiveThreshold(_in, _out, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY_INV, winSize, constant);
+}
+
+/**
+  * @brief Given a tresholded image, find the contours, calculate their polygonal approximation
+  * and take those that accomplish some conditions
+  */
+static void _findMarkerContours(InputArray _in, vector< vector< Point2f > > &candidates,
+                                vector< vector< Point > > &contoursOut, double minPerimeterRate,
+                                double maxPerimeterRate, double accuracyRate,
+                                double minCornerDistanceRate, int minDistanceToBorder) {
+
+    CV_Assert(minPerimeterRate > 0 && maxPerimeterRate > 0 && accuracyRate > 0 &&
+              minCornerDistanceRate >= 0 && minDistanceToBorder >= 0);
+
+    // calculate maximum and minimum sizes in pixels
+    unsigned int minPerimeterPixels =
+            (unsigned int)(minPerimeterRate * max(_in.getMat().cols, _in.getMat().rows));
+    unsigned int maxPerimeterPixels =
+            (unsigned int)(maxPerimeterRate * max(_in.getMat().cols, _in.getMat().rows));
+
+    Mat contoursImg;
+    _in.getMat().copyTo(contoursImg);
+    vector< vector< Point > > contours;
+    findContours(contoursImg, contours, RETR_LIST, CHAIN_APPROX_NONE);
+    // now filter list of contours
+    for(unsigned int i = 0; i < contours.size(); i++) {
+        // check perimeter
+        if(contours[i].size() < minPerimeterPixels || contours[i].size() > maxPerimeterPixels)
+            continue;
+
+        // check is square and is convex
+        vector< Point > approxCurve;
+        approxPolyDP(contours[i], approxCurve, double(contours[i].size()) * accuracyRate, true);
+        if(approxCurve.size() != 4 || !isContourConvex(approxCurve)) continue;
+
+        // check min distance between corners
+        double minDistSq =
+                max(contoursImg.cols, contoursImg.rows) * max(contoursImg.cols, contoursImg.rows);
+        for(int j = 0; j < 4; j++) {
+            double d = (double)(approxCurve[j].x - approxCurve[(j + 1) % 4].x) *
+                       (double)(approxCurve[j].x - approxCurve[(j + 1) % 4].x) +
+                       (double)(approxCurve[j].y - approxCurve[(j + 1) % 4].y) *
+                       (double)(approxCurve[j].y - approxCurve[(j + 1) % 4].y);
+            minDistSq = min(minDistSq, d);
+        }
+        double minCornerDistancePixels = double(contours[i].size()) * minCornerDistanceRate;
+        if(minDistSq < minCornerDistancePixels * minCornerDistancePixels) continue;
+
+        // check if it is too near to the image border
+        bool tooNearBorder = false;
+        for(int j = 0; j < 4; j++) {
+            if(approxCurve[j].x < minDistanceToBorder || approxCurve[j].y < minDistanceToBorder ||
+               approxCurve[j].x > contoursImg.cols - 1 - minDistanceToBorder ||
+               approxCurve[j].y > contoursImg.rows - 1 - minDistanceToBorder)
+                tooNearBorder = true;
+        }
+        if(tooNearBorder) continue;
+
+        // if it passes all the test, add to candidates vector
+        vector< Point2f > currentCandidate;
+        currentCandidate.resize(4);
+        for(int j = 0; j < 4; j++) {
+            currentCandidate[j] = Point2f((float)approxCurve[j].x, (float)approxCurve[j].y);
+        }
+        candidates.push_back(currentCandidate);
+        contoursOut.push_back(contours[i]);
+    }
+}
+
+/**
+  * ParallelLoopBody class for the parallelization of the basic candidate detections using
+  * different threhold window sizes. Called from function _detectInitialCandidates()
+  */
+class DetectInitialCandidatesParallel : public ParallelLoopBody {
+public:
+    DetectInitialCandidatesParallel(const Mat *_grey,
+                                    vector< vector< vector< Point2f > > > *_candidatesArrays,
+                                    vector< vector< vector< Point > > > *_contoursArrays,
+                                    const Ptr<aruco::DetectorParameters> &_params)
+            : grey(_grey), candidatesArrays(_candidatesArrays), contoursArrays(_contoursArrays),
+              params(_params) {}
+
+    void operator()(const Range &range) const {
+        const int begin = range.start;
+        const int end = range.end;
+
+        for(int i = begin; i < end; i++) {
+            int currScale =
+                    params->adaptiveThreshWinSizeMin + i * params->adaptiveThreshWinSizeStep;
+            // threshold
+            Mat thresh;
+            _threshold(*grey, thresh, currScale, params->adaptiveThreshConstant);
+
+            // detect rectangles
+            _findMarkerContours(thresh, (*candidatesArrays)[i], (*contoursArrays)[i],
+                                params->minMarkerPerimeterRate, params->maxMarkerPerimeterRate,
+                                params->polygonalApproxAccuracyRate, params->minCornerDistanceRate,
+                                params->minDistanceToBorder);
+        }
+    }
+
+private:
+    DetectInitialCandidatesParallel &operator=(const DetectInitialCandidatesParallel &);
+
+    const Mat *grey;
+    vector< vector< vector< Point2f > > > *candidatesArrays;
+    vector< vector< vector< Point > > > *contoursArrays;
+    const Ptr<aruco::DetectorParameters> &params;
+};
+
+/**
+ * @brief Initial steps on finding square candidates
+ */
+static void _detectInitialCandidates(const Mat &grey, vector< vector< Point2f > > &candidates,
+                                     vector< vector< Point > > &contours,
+                                     const Ptr<aruco::DetectorParameters> &params) {
+
+    CV_Assert(params->adaptiveThreshWinSizeMin >= 3 && params->adaptiveThreshWinSizeMax >= 3);
+    CV_Assert(params->adaptiveThreshWinSizeMax >= params->adaptiveThreshWinSizeMin);
+    CV_Assert(params->adaptiveThreshWinSizeStep > 0);
+
+    // number of window sizes (scales) to apply adaptive thresholding
+    int nScales =  (params->adaptiveThreshWinSizeMax - params->adaptiveThreshWinSizeMin) /
+                   params->adaptiveThreshWinSizeStep + 1;
+
+    vector< vector< vector< Point2f > > > candidatesArrays((size_t) nScales);
+    vector< vector< vector< Point > > > contoursArrays((size_t) nScales);
+
+    ////for each value in the interval of thresholding window sizes
+    // for(int i = 0; i < nScales; i++) {
+    //    int currScale = params.adaptiveThreshWinSizeMin + i*params.adaptiveThreshWinSizeStep;
+    //    // treshold
+    //    Mat thresh;
+    //    _threshold(grey, thresh, currScale, params.adaptiveThreshConstant);
+    //    // detect rectangles
+    //    _findMarkerContours(thresh, candidatesArrays[i], contoursArrays[i],
+    // params.minMarkerPerimeterRate,
+    //                        params.maxMarkerPerimeterRate, params.polygonalApproxAccuracyRate,
+    //                        params.minCornerDistance, params.minDistanceToBorder);
+    //}
+
+    // this is the parallel call for the previous commented loop (result is equivalent)
+    parallel_for_(Range(0, nScales), DetectInitialCandidatesParallel(&grey, &candidatesArrays,
+                                                                     &contoursArrays, params));
+
+    // join candidates
+    for(int i = 0; i < nScales; i++) {
+        for(unsigned int j = 0; j < candidatesArrays[i].size(); j++) {
+            candidates.push_back(candidatesArrays[i][j]);
+            contours.push_back(contoursArrays[i][j]);
+        }
+    }
+}
+
+/**
+  * @brief Assure order of candidate corners is clockwise direction
+  */
+static void _reorderCandidatesCorners(vector< vector< Point2f > > &candidates) {
+
+    for(unsigned int i = 0; i < candidates.size(); i++) {
+        double dx1 = candidates[i][1].x - candidates[i][0].x;
+        double dy1 = candidates[i][1].y - candidates[i][0].y;
+        double dx2 = candidates[i][2].x - candidates[i][0].x;
+        double dy2 = candidates[i][2].y - candidates[i][0].y;
+        double crossProduct = (dx1 * dy2) - (dy1 * dx2);
+
+        if(crossProduct < 0.0) { // not clockwise direction
+            swap(candidates[i][1], candidates[i][3]);
+        }
+    }
+}
+
+/**
+  * @brief Check candidates that are too close to each other and remove the smaller one
+  */
+static void _filterTooCloseCandidates(const vector< vector< Point2f > > &candidatesIn,
+                                      vector< vector< Point2f > > &candidatesOut,
+                                      const vector< vector< Point > > &contoursIn,
+                                      vector< vector< Point > > &contoursOut,
+                                      double minMarkerDistanceRate) {
+
+    CV_Assert(minMarkerDistanceRate >= 0);
+
+    vector< pair< int, int > > nearCandidates;
+    for(unsigned int i = 0; i < candidatesIn.size(); i++) {
+        for(unsigned int j = i + 1; j < candidatesIn.size(); j++) {
+
+            int minimumPerimeter = min((int)contoursIn[i].size(), (int)contoursIn[j].size() );
+
+            // fc is the first corner considered on one of the markers, 4 combinations are possible
+            for(int fc = 0; fc < 4; fc++) {
+                double distSq = 0;
+                for(int c = 0; c < 4; c++) {
+                    // modC is the corner considering first corner is fc
+                    int modC = (c + fc) % 4;
+                    distSq += (candidatesIn[i][modC].x - candidatesIn[j][c].x) *
+                              (candidatesIn[i][modC].x - candidatesIn[j][c].x) +
+                              (candidatesIn[i][modC].y - candidatesIn[j][c].y) *
+                              (candidatesIn[i][modC].y - candidatesIn[j][c].y);
+                }
+                distSq /= 4.;
+
+                // if mean square distance is too low, remove the smaller one of the two markers
+                double minMarkerDistancePixels = double(minimumPerimeter) * minMarkerDistanceRate;
+                if(distSq < minMarkerDistancePixels * minMarkerDistancePixels) {
+                    nearCandidates.push_back(pair< int, int >(i, j));
+                    break;
+                }
+            }
+        }
+    }
+
+    // mark smaller one in pairs to remove
+    vector< bool > toRemove(candidatesIn.size(), false);
+    for(unsigned int i = 0; i < nearCandidates.size(); i++) {
+        // if one of the marker has been already markerd to removed, dont need to do anything
+        if(toRemove[nearCandidates[i].first] || toRemove[nearCandidates[i].second]) continue;
+        size_t perimeter1 = contoursIn[nearCandidates[i].first].size();
+        size_t perimeter2 = contoursIn[nearCandidates[i].second].size();
+        if(perimeter1 > perimeter2)
+            toRemove[nearCandidates[i].second] = true;
+        else
+            toRemove[nearCandidates[i].first] = true;
+    }
+
+    // remove extra candidates
+    candidatesOut.clear();
+    unsigned long totalRemaining = 0;
+    for(unsigned int i = 0; i < toRemove.size(); i++)
+        if(!toRemove[i]) totalRemaining++;
+    candidatesOut.resize(totalRemaining);
+    contoursOut.resize(totalRemaining);
+    for(unsigned int i = 0, currIdx = 0; i < candidatesIn.size(); i++) {
+        if(toRemove[i]) continue;
+        candidatesOut[currIdx] = candidatesIn[i];
+        contoursOut[currIdx] = contoursIn[i];
+        currIdx++;
+    }
+}
+
+/**
+ * @brief Detect square candidates in the input image
+ */
+static void _detectCandidates(InputArray _image, OutputArrayOfArrays _candidates,
+                              OutputArrayOfArrays _contours, const Ptr<aruco::DetectorParameters> &_params) {
+
+    Mat image = _image.getMat();
+    CV_Assert(image.total() != 0);
+
+    /// 1. CONVERT TO GRAY
+    Mat grey;
+    _convertToGrey(image, grey);
+
+    vector <vector<Point2f> > candidates;
+    vector <vector<Point> > contours;
+    /// 2. DETECT FIRST SET OF CANDIDATES
+    _detectInitialCandidates(grey, candidates, contours, _params);
+
+    /// 3. SORT CORNERS
+    _reorderCandidatesCorners(candidates);
+
+    /// 4. FILTER OUT NEAR CANDIDATE PAIRS
+    vector <vector<Point2f> > candidatesOut;
+    vector <vector<Point> > contoursOut;
+    _filterTooCloseCandidates(candidates, candidatesOut, contours, contoursOut,
+                              _params->minMarkerDistanceRate);
+
+    // parse output
+    _candidates.create((int) candidatesOut.size(), 1, CV_32FC2);
+    _contours.create((int) contoursOut.size(), 1, CV_32SC2);
+    for (int i = 0; i < (int) candidatesOut.size(); i++) {
+        _candidates.create(4, 1, CV_32FC2, i, true);
+        Mat m = _candidates.getMat(i);
+        for (int j = 0; j < 4; j++)
+            m.ptr<Vec2f>(0)[j] = candidatesOut[i][j];
+
+        _contours.create((int) contoursOut[i].size(), 1, CV_32SC2, i, true);
+        Mat c = _contours.getMat(i);
+        for (unsigned int j = 0; j < contoursOut[i].size(); j++)
+            c.ptr<Point2i>()[j] = contoursOut[i][j];
+    }
+}
+
 int main(int argc, char** argv)
 {
+//    cv::Mat markerImage;
+//    cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
+//    cv::aruco::drawMarker(dictionary, 23, 200, markerImage, 1);
+//    cv::imshow("marker", markerImage);
+
     AprilTagOptions opts = parse_options(argc, argv);
 
     TagFamily family(opts.family_str);
@@ -227,58 +540,66 @@ int main(int argc, char** argv)
         if(frame.empty())
             break;
 
-        cv::Mat temp;
+//        cv::Mat temp;
+//
+//        cv::cvtColor(frame, temp, cv::COLOR_BGR2GRAY); // Convert to greyscale
+//        cv::pyrDown(temp, temp, cv::Size(frame.cols/2, frame.rows/2)); // Downsample to half size and blur
+//        cv::pyrUp(temp, temp, frame.size()); // Upsample back to original size
+//
+//        cv::Canny(temp, temp, 100, 5);
+//        dilate(temp, temp, cv::Mat(), cv::Point(-1, -1));
+//
+//        std::vector<std::vector<cv::Point> > contours;
+//        cv::findContours(temp, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
+//
+//        std::vector<cv::Point> approx;
+//        std::vector<std::vector<cv::Point> > squares;
+//
+//        // Iterate over each contour
+//        for(size_t i = 0; i < contours.size(); i++)
+//        {
+//            // Approximate the contour with accuracy proportional to the contour perimeter
+//            approxPolyDP(cv::Mat(contours[i]), approx, arcLength(cv::Mat(contours[i]), true) * 0.02, true);
+//
+//            // Square contours should have 4 vertices after approximation,
+//            // a relatively large area (to filter out noisy contours, and be convex.
+//            // Note: absolute value of an area is used because area may be positive or negative,
+//            // in accordance with the contour orientation
+//            if(approx.size() == 4 &&
+//               fabs(contourArea(cv::Mat(approx))) > 500 &&
+//               fabs(contourArea(cv::Mat(approx))) < 1000 &&
+//               isContourConvex(cv::Mat(approx)))
+//            {
+//                double maxCosine = 0;
+//
+//                for(int j = 2; j < 5; j++)
+//                {
+//                    // Find the maximum cosine of the angle between joint edges
+//                    double cosine = fabs(angle(approx[j%4], approx[j-2], approx[j-1]));
+//                    maxCosine = MAX(maxCosine, cosine);
+//                }
+//
+//                // If cosines of all angles are small (all angles are ~90 degree),
+//                // then write quadrangle vertices to resultant sequence
+//                if(maxCosine < 0.3)
+//                    squares.push_back(approx);
+//            }
+//        }
+//
+//        for(size_t i = 0; i < squares.size(); i++)
+//        {
+//            const cv::Point* p = &squares[i][0];
+//            int n = (int) squares[i].size();
+//            polylines(frame, &p, &n, 1, true, cv::Scalar(0, 255, 0), 3, CV_AA);
+//        }
 
-        cv::cvtColor(frame, temp, cv::COLOR_BGR2GRAY); // Convert to greyscale
-        cv::pyrDown(temp, temp, cv::Size(frame.cols/2, frame.rows/2)); // Downsample to half size and blur
-        cv::pyrUp(temp, temp, frame.size()); // Upsample back to original size
+        cv::Mat grey;
+        _convertToGrey(frame, grey);
 
-        cv::Canny(temp, temp, 100, 5);
-        dilate(temp, temp, cv::Mat(), cv::Point(-1, -1));
-
-        cv::vector<cv::vector<cv::Point> > contours;
-        cv::findContours(temp, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
-
-        cv::vector<cv::Point> approx;
-        cv::vector<cv::vector<cv::Point> > squares;
-
-        // Iterate over each contour
-        for(size_t i = 0; i < contours.size(); i++)
-        {
-            // Approximate the contour with accuracy proportional to the contour perimeter
-            approxPolyDP(cv::Mat(contours[i]), approx, arcLength(cv::Mat(contours[i]), true) * 0.02, true);
-
-            // Square contours should have 4 vertices after approximation,
-            // a relatively large area (to filter out noisy contours, and be convex.
-            // Note: absolute value of an area is used because area may be positive or negative,
-            // in accordance with the contour orientation
-            if(approx.size() == 4 &&
-               fabs(contourArea(cv::Mat(approx))) > 500 &&
-               fabs(contourArea(cv::Mat(approx))) < 1000 &&
-               isContourConvex(cv::Mat(approx)))
-            {
-                double maxCosine = 0;
-
-                for(int j = 2; j < 5; j++)
-                {
-                    // Find the maximum cosine of the angle between joint edges
-                    double cosine = fabs(angle(approx[j%4], approx[j-2], approx[j-1]));
-                    maxCosine = MAX(maxCosine, cosine);
-                }
-
-                // If cosines of all angles are small (all angles are ~90 degree),
-                // then write quadrangle vertices to resultant sequence
-                if(maxCosine < 0.3)
-                    squares.push_back(approx);
-            }
-        }
-
-        for(size_t i = 0; i < squares.size(); i++)
-        {
-            const cv::Point* p = &squares[i][0];
-            int n = (int) squares[i].size();
-            polylines(frame, &p, &n, 1, true, cv::Scalar(0, 255, 0), 3, CV_AA);
-        }
+        std::vector<std::vector<cv::Point2f> > candidates;
+        std::vector<std::vector<cv::Point> > contours;
+        cv::Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create();
+        _detectCandidates(grey, candidates, contours, params);
 
         cv::Mat show;
 
