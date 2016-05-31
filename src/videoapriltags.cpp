@@ -150,16 +150,6 @@ void getEulerAngles(cv::Mat &rotCamerMatrix, cv::Vec3d &eulerAngles)
                                   eulerAngles);
 }
 
-// Finds a cosine of angle between vectors from pt0->pt1 and from pt0->pt2
-double angle(cv::Point pt1, cv::Point pt2, cv::Point pt0)
-{
-    double dx1 = pt1.x - pt0.x;
-    double dy1 = pt1.y - pt0.y;
-    double dx2 = pt2.x - pt0.x;
-    double dy2 = pt2.y - pt0.y;
-    return (dx1*dx2 + dy1*dy2)/sqrt((dx1*dx1 + dy1*dy1)*(dx2*dx2 + dy2*dy2) + 1e-10);
-}
-
 using namespace cv;
 using namespace std;
 
@@ -470,11 +460,6 @@ static void _detectCandidates(InputArray _image, OutputArrayOfArrays _candidates
 
 int main(int argc, char** argv)
 {
-//    cv::Mat markerImage;
-//    cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
-//    cv::aruco::drawMarker(dictionary, 23, 200, markerImage, 1);
-//    cv::imshow("marker", markerImage);
-
     AprilTagOptions opts = parse_options(argc, argv);
 
     TagFamily family(opts.family_str);
@@ -540,58 +525,6 @@ int main(int argc, char** argv)
         if(frame.empty())
             break;
 
-//        cv::Mat temp;
-//
-//        cv::cvtColor(frame, temp, cv::COLOR_BGR2GRAY); // Convert to greyscale
-//        cv::pyrDown(temp, temp, cv::Size(frame.cols/2, frame.rows/2)); // Downsample to half size and blur
-//        cv::pyrUp(temp, temp, frame.size()); // Upsample back to original size
-//
-//        cv::Canny(temp, temp, 100, 5);
-//        dilate(temp, temp, cv::Mat(), cv::Point(-1, -1));
-//
-//        std::vector<std::vector<cv::Point> > contours;
-//        cv::findContours(temp, contours, CV_RETR_LIST, CV_CHAIN_APPROX_SIMPLE);
-//
-//        std::vector<cv::Point> approx;
-//        std::vector<std::vector<cv::Point> > squares;
-//
-//        // Iterate over each contour
-//        for(size_t i = 0; i < contours.size(); i++)
-//        {
-//            // Approximate the contour with accuracy proportional to the contour perimeter
-//            approxPolyDP(cv::Mat(contours[i]), approx, arcLength(cv::Mat(contours[i]), true) * 0.02, true);
-//
-//            // Square contours should have 4 vertices after approximation,
-//            // a relatively large area (to filter out noisy contours, and be convex.
-//            // Note: absolute value of an area is used because area may be positive or negative,
-//            // in accordance with the contour orientation
-//            if(approx.size() == 4 &&
-//               fabs(contourArea(cv::Mat(approx))) > 500 &&
-//               fabs(contourArea(cv::Mat(approx))) < 1000 &&
-//               isContourConvex(cv::Mat(approx)))
-//            {
-//                double maxCosine = 0;
-//
-//                for(int j = 2; j < 5; j++)
-//                {
-//                    // Find the maximum cosine of the angle between joint edges
-//                    double cosine = fabs(angle(approx[j%4], approx[j-2], approx[j-1]));
-//                    maxCosine = MAX(maxCosine, cosine);
-//                }
-//
-//                // If cosines of all angles are small (all angles are ~90 degree),
-//                // then write quadrangle vertices to resultant sequence
-//                if(maxCosine < 0.3)
-//                    squares.push_back(approx);
-//            }
-//        }
-//
-//        for(size_t i = 0; i < squares.size(); i++)
-//        {
-//            const cv::Point* p = &squares[i][0];
-//            int n = (int) squares[i].size();
-//            polylines(frame, &p, &n, 1, true, cv::Scalar(0, 255, 0), 3, CV_AA);
-//        }
 
         cv::Mat grey;
         _convertToGrey(frame, grey);
@@ -599,7 +532,9 @@ int main(int argc, char** argv)
         std::vector<std::vector<cv::Point2f> > candidates;
         std::vector<std::vector<cv::Point> > contours;
         cv::Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create();
+
         _detectCandidates(grey, candidates, contours, params);
+        aruco::drawDetectedMarkers(frame, candidates, noArray(), Scalar(100, 0, 255));
 
         cv::Mat show;
 
