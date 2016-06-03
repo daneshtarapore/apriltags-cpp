@@ -471,7 +471,8 @@ int main(int argc, char** argv)
     std::cout << "family.errorRecoveryBits = " << family.errorRecoveryBits << "\n";
 
     cv::VideoCapture vc;
-    std::string videoFilePath = "/mnt/hgfs/millard/Desktop/epucks.MTS";
+//    std::string videoFilePath = "/mnt/hgfs/millard/Desktop/epucks.MTS";
+    std::string videoFilePath = "/mnt/hgfs/millard/Desktop/aruco.MTS";
 
     try
     {
@@ -503,8 +504,8 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    cv::transpose(frame, frame);
-    cv::flip(frame, frame, 1);
+//    cv::transpose(frame, frame);
+//    cv::flip(frame, frame, 1);
 
     opticalCenter.x = frame.cols * 0.5;
     opticalCenter.y = frame.rows * 0.5;
@@ -519,22 +520,29 @@ int main(int argc, char** argv)
     while(true)
     {
         vc >> frame;
-        cv::transpose(frame, frame);
-        cv::flip(frame, frame, 1);
+//        cv::transpose(frame, frame);
+//        cv::flip(frame, frame, 1);
 
         if(frame.empty())
             break;
 
+//        cv::Mat grey;
+//        _convertToGrey(frame, grey);
+//
+//        std::vector<std::vector<cv::Point2f> > candidates;
+//        std::vector<std::vector<cv::Point> > contours;
+//        cv::Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create();
+//
+//        _detectCandidates(grey, candidates, contours, params);
+//        aruco::drawDetectedMarkers(frame, candidates, noArray(), Scalar(100, 0, 255));
 
-        cv::Mat grey;
-        _convertToGrey(frame, grey);
+        std::vector<int> markerIds;
+        std::vector<std::vector<Point2f> > markerCorners, rejectedCandidates;
+        cv::Ptr<aruco::DetectorParameters> parameters = aruco::DetectorParameters::create();
+        cv::Ptr<aruco::Dictionary> dictionary = aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
+        cv::aruco::detectMarkers(frame, dictionary, markerCorners, markerIds, parameters, rejectedCandidates);
 
-        std::vector<std::vector<cv::Point2f> > candidates;
-        std::vector<std::vector<cv::Point> > contours;
-        cv::Ptr<aruco::DetectorParameters> params = aruco::DetectorParameters::create();
-
-        _detectCandidates(grey, candidates, contours, params);
-        aruco::drawDetectedMarkers(frame, candidates, noArray(), Scalar(100, 0, 255));
+        aruco::drawDetectedMarkers(frame, markerCorners, markerIds);
 
         cv::Mat show;
 
@@ -608,7 +616,8 @@ int main(int argc, char** argv)
             }
         }
 
-        cv::resize(show, show, cv::Size(720, 1280), 0, 0, cv::INTER_CUBIC);
+//        cv::resize(show, show, cv::Size(720, 1280), 0, 0, cv::INTER_CUBIC);
+        cv::resize(show, show, cv::Size(1280, 720), 0, 0, cv::INTER_CUBIC);
         cv::imshow(win, show);
 
         int k = cv::waitKey(1);
