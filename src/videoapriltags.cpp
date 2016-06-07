@@ -120,6 +120,7 @@ AprilTagOptions parse_options(int argc, char** argv)
             case 'd': opts.device_num = atoi(optarg); break;
             case 'F': opts.focal_length = atof(optarg); break;
             case 'z': opts.tag_size = atof(optarg); break;
+
             default:
                 fprintf(stderr, "\n");
                 print_usage(argv[0], stderr);
@@ -472,7 +473,8 @@ int main(int argc, char** argv)
 
     cv::VideoCapture vc;
 //    std::string videoFilePath = "/mnt/hgfs/millard/Desktop/epucks.MTS";
-    std::string videoFilePath = "/mnt/hgfs/millard/Desktop/aruco.MTS";
+    //std::string videoFilePath = "/mnt/hgfs/millard/Desktop/aruco.MTS";
+    std::string videoFilePath = "/home/danesh/work/apriltags-cpp/videos/aruco.MTS";
 
     try
     {
@@ -542,7 +544,67 @@ int main(int argc, char** argv)
         cv::Ptr<aruco::Dictionary> dictionary = aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
         cv::aruco::detectMarkers(frame, dictionary, markerCorners, markerIds, parameters, rejectedCandidates);
 
-        aruco::drawDetectedMarkers(frame, markerCorners, markerIds);
+        if(markerIds.size() > 0)
+        {
+            //std::cout << " marker id 0 " << markerCorners[0][3].x << std::endl;
+            for (size_t marker_index = 0; marker_index < markerIds.size(); ++marker_index)
+            {
+                if(markerIds[marker_index] == 0)
+                {
+                    cv::putText(frame,
+                                ".",
+                                markerCorners[marker_index][3],
+                                cv::FONT_HERSHEY_SIMPLEX,
+                                1,
+                                CV_RGB(255, 0, 0),
+                                2,
+                                CV_AA); // bottom-left corner
+
+                    cv::putText(frame,
+                                ".",
+                                markerCorners[marker_index][2],
+                                cv::FONT_HERSHEY_SIMPLEX,
+                                1,
+                                CV_RGB(255, 0, 0),
+                                2,
+                                CV_AA); // bottom-right corner
+
+                    float bottomlineangle = std::atan2(markerCorners[marker_index][2].y - markerCorners[marker_index][3].y, markerCorners[marker_index][2].x - markerCorners[marker_index][3].x)* 180.0f / M_PI; // atan2 returns angle in radians [-pi, pi]
+                    if(std::isnan(bottomlineangle))
+                    {
+                        std::cout << " angle is nan for tag points " << markerCorners[marker_index] << std::endl;
+                        exit(-1);
+                    }
+
+
+                    at::Point corners[4], cornerscenter;
+                    corners[0] = markerCorners[marker_index][0];
+                    corners[1] = markerCorners[marker_index][1];
+                    corners[2] = markerCorners[marker_index][2];
+                    corners[3] = markerCorners[marker_index][3];
+                    cornerscenter = interpolate(corners, at::Point(0.5, 0.5));
+
+                    std::ostringstream x, y, orientation;
+                    x << std::fixed << std::setprecision(2) << cornerscenter.x;
+                    y << std::fixed << std::setprecision(2) << cornerscenter.y;
+                    orientation << std::fixed << std::setprecision(2) << bottomlineangle;
+                    std::string text = "x: " + x.str() + ", y: " + y.str() + ", a: " + orientation.str();
+
+
+                    cv::putText(frame,
+                                text,
+                                cornerscenter,
+                                cv::FONT_HERSHEY_SIMPLEX,
+                                1,
+                                CV_RGB(255, 0, 0),
+                                2,
+                                CV_AA);
+                }
+
+            }
+        }
+
+        //aruco::drawDetectedMarkers(frame, markerCorners, markerIds);
 
         cv::Mat show;
 
@@ -551,6 +613,8 @@ int main(int argc, char** argv)
         else
         {
             show = family.superimposeDetections(frame, detections);
+
+            exit(-1);
 
             double s = opts.tag_size;
             double f = opts.focal_length;
