@@ -30,6 +30,9 @@ target_link_libraries(videoapriltags ${AT_LIBS})
 add_executable(create_marker create_marker.cpp)
 target_link_libraries(create_marker ${AT_LIBS})
 
+add_executable(camera_calibration camera_calibration.cpp)
+target_link_libraries(camera_calibration ${AT_LIBS})
+
 if (GLUT_LIBRARY)
 
   add_executable(gltest gltest.cpp)
