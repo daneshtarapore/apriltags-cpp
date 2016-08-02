@@ -24,6 +24,7 @@
 
 #define DEFAULT_TAG_FAMILY "Tag36h11"
 
+
 typedef struct AprilTagOptions
 {
     AprilTagOptions():
@@ -459,8 +460,47 @@ static void _detectCandidates(InputArray _image, OutputArrayOfArrays _candidates
     }
 }
 
-int main(int argc, char** argv)
+void projectPoints_Img2World(cv::Mat cameraMatrix, double world_z, at::Point undistort_imgpoint, at::Point &undistort_worldpoint)
 {
+    double image_x = undistort_imgpoint.x;
+    double image_y = undistort_imgpoint.y;
+
+    double c_x = cameraMatrix.at<double>(0,2);
+    double c_y = cameraMatrix.at<double>(1,2);
+
+    double f_x = cameraMatrix.at<double>(0,0);
+    double f_y = cameraMatrix.at<double>(1,1);
+
+    /*
+     * ref: http://stackoverflow.com/questions/12007775/to-calculate-world-coordinates-from-screen-coordinates-with-opencv
+     x_screen = (x_world/z_world)*f_x + c_x
+     y_screen = (y_world/z_world)*f_y + c_y
+
+     x_world = (x_screen - c_x) * z_world / f_x
+     y_world = (y_screen - c_y) * z_world / f_y*/
+
+    double world_x = (image_x - c_x) * world_z / f_x;
+    double world_y = (image_y - c_y) * world_z / f_y;
+
+    undistort_worldpoint.x = world_x;
+    undistort_worldpoint.y = world_y;
+
+    /*
+     * But from my calculations, I think we should use the following:
+    double world_x = (image_x - c_x * world_z) / f_x;
+    double world_y = (image_y - c_y * world_z) / f_y;*/
+}
+
+
+
+int main(int argc, char** argv)
+{    
+    double tmp_cameraMatrix[3][3] = {{1.4762892998164452e+03, 0.0, 9.5950000000000000e+02}, {0.0, 1.4762892998164452e+03, 5.3950000000000000e+02}, {0.0, 0.0, 1}};
+    cv::Mat cameraMatrix = Mat(3, 3, CV_64FC1, &tmp_cameraMatrix);
+    double tmp_distCoeffs[5][1] = {-2.4510195273745963e-01, 3.0439993854767891e+00, 0.0, 0.0, -1.3822381196571376e+01};
+    cv::Mat distCoeffs = Mat(5, 1, CV_64FC1, &tmp_distCoeffs);
+
+
     AprilTagOptions opts = parse_options(argc, argv);
 
     TagFamily family(opts.family_str);
@@ -495,10 +535,13 @@ int main(int argc, char** argv)
               << vc.get(CV_CAP_PROP_FRAME_WIDTH) << "x"
               << vc.get(CV_CAP_PROP_FRAME_HEIGHT) << "\n";
 
-    cv::Mat frame;
+    cv::Mat distort_frame, frame;
     cv::Point2d opticalCenter;
 
-    vc >> frame;
+    vc >> distort_frame;
+    //frame = distort_frame.clone();
+
+    undistort(distort_frame, frame, cameraMatrix, distCoeffs);
 
     if(frame.empty())
     {
@@ -521,7 +564,8 @@ int main(int argc, char** argv)
   
     while(true)
     {
-        vc >> frame;
+        vc >> distort_frame;
+        undistort(distort_frame, frame, cameraMatrix, distCoeffs);
 //        cv::transpose(frame, frame);
 //        cv::flip(frame, frame, 1);
 
@@ -583,6 +627,12 @@ int main(int argc, char** argv)
                     corners[2] = markerCorners[marker_index][2];
                     corners[3] = markerCorners[marker_index][3];
                     cornerscenter = interpolate(corners, at::Point(0.5, 0.5));
+
+                    at::Point world_corners[4], world_center;
+                    double world_z = 200.0f; // assume the camera is 2m above the robot's tags
+                    projectPoints_Img2World(cameraMatrix, world_z, cornerscenter, world_center);
+                    std::cout << " world center of tag 0 is " << world_center << std::endl;
+
 
                     std::ostringstream x, y, orientation;
                     x << std::fixed << std::setprecision(2) << cornerscenter.x;
