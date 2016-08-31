@@ -322,6 +322,8 @@ int main(int argc, char* argv[])
         //! [pattern_found]
         if ( found)                // If done with success,
         {
+            cout << "pattern found" << endl;
+
               // improve the found corners' coordinate accuracy for chessboard
                 if( s.calibrationPattern == Settings::CHESSBOARD)
                 {
@@ -374,22 +376,35 @@ int main(int argc, char* argv[])
         //! [output_undistorted]
         //------------------------------ Show image and check for input commands -------------------
         //! [await_input]
-        Mat temp;
-        resize(view, temp, Size(view.cols * 0.25, view.rows * 0.25), 0, 0, INTER_CUBIC);
-        imshow("Image View", temp);
-        char key = (char)waitKey(s.inputCapture.isOpened() ? 50 : s.delay);
 
-        if( key  == ESC_KEY )
-            break;
-
-        if( key == 'u' && mode == CALIBRATED )
-           s.showUndistorsed = !s.showUndistorsed;
-
-        if( s.inputCapture.isOpened() && key == 'g' )
+        if(found)
         {
-            mode = CAPTURING;
-            imagePoints.clear();
+            Mat temp;
+            resize(view, temp, Size(view.cols * 0.25, view.rows * 0.25), 0, 0, INTER_CUBIC);
+            imshow("Image View", temp);
+            // char key = (char)waitKey(s.inputCapture.isOpened() ? 50 : s.delay);
+            char key = (char) waitKey();
+
+            if( key  == ESC_KEY )
+                break;
+
+            if(key == 'r')
+            {
+                cout << "rejected" << endl;
+                imagePoints.pop_back();
+            }
+            else
+                cout << "accepted" << endl;
         }
+
+        // if( key == 'u' && mode == CALIBRATED )
+        //    s.showUndistorsed = !s.showUndistorsed;
+
+        // if( s.inputCapture.isOpened() && key == 'g' )
+        // {
+        //     mode = CAPTURING;
+        //     imagePoints.clear();
+        // }
         //! [await_input]
     }
 
